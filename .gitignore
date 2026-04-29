@@ -1,0 +1,5 @@
+# Bỏ qua các thư mục build của C#
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user

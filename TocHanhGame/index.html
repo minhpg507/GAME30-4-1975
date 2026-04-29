@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Chuyến xe Tốc hành - 30/04</title>
+    <style>
+        body { margin: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; background: #1e293b; font-family: 'Segoe UI', sans-serif; color: white; }
+        h1 { color: #FFCD00; text-shadow: 2px 2px #DA251D; margin-top: 20px; text-transform: uppercase;}
+        #game-container { position: relative; border: 5px solid #FFCD00; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        
+        canvas { 
+            display: block; 
+            border-radius: 5px; 
+            image-rendering: pixelated; 
+            image-rendering: crisp-edges;
+        }
+        
+        #ui-overlay { position: absolute; top: 15px; left: 15px; color: #DA251D; font-weight: bold; font-size: 24px; background: rgba(255,255,255,0.9); padding: 5px 15px; border-radius: 20px; box-shadow: 2px 2px 0px #000;}
+        #menu, #leaderboard-panel { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(255, 255, 255, 0.95); padding: 30px; border-radius: 15px; color: #333; box-shadow: 0 5px 15px rgba(0,0,0,0.5); width: 350px;}
+        button { padding: 12px 25px; font-size: 18px; background: #DA251D; color: white; border: 2px solid #000; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-top: 10px; box-shadow: 3px 3px 0px #000;}
+        button:hover { background: #b91d17; transform: translate(2px, 2px); box-shadow: 1px 1px 0px #000; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border-bottom: 1px dashed #ccc; padding: 10px; text-align: center; }
+        th { color: #DA251D; }
+    </style>
+</head>
+<body>
+
+<h1>ĐƯỜNG TỚI ĐỘC LẬP</h1>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    <div id="ui-overlay">Kỷ lục: <span id="score">0</span> km</div>
+    
+    <div id="menu">
+        <h2 id="menu-title" style="color: #DA251D; font-size: 32px; margin-top:0;">TIẾN VỀ SÀI GÒN</h2>
+        <p>Sử dụng <b>Phím Mũi Tên Trái/Phải</b> hoặc <b>A/D</b> để lái xe tăng né chướng ngại vật!</p>
+        <p id="final-score" style="font-size: 24px; font-weight: bold; color: #DA251D;"></p>
+        <button onclick="startGame()">Bắt đầu chiến dịch</button>
+        <button onclick="showLeaderboard()" style="background: #3b82f6;">Bảng Xếp Hạng</button>
+    </div>
+
+    <div id="leaderboard-panel" style="display: none;">
+        <h2 style="color: #DA251D; margin-top:0;">BẢNG VÀNG</h2>
+        <table id="lb-table">
+            <thead><tr><th>Top</th><th>Chỉ huy</th><th>Điểm</th></tr></thead>
+            <tbody id="lb-body">
+                <tr><td colspan="3">Đang tải dữ liệu...</td></tr>
+            </tbody>
+        </table>
+        <button onclick="hideLeaderboard()">Đóng</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const menu = document.getElementById('menu');
+    const lbPanel = document.getElementById('leaderboard-panel');
+    const lbBody = document.getElementById('lb-body');
+
+    // API Của Bạn
+    const API_URL = 'https://localhost:7249/api/Leaderboard';
+
+    // Khởi tạo ảnh trực tiếp (Bỏ bộ đếm rườm rà)
+    const bgImg = new Image(); bgImg.src = 'background.png';
+    const tankImg = new Image(); tankImg.src = 'tank.png';
+    const obsImg = new Image(); obsImg.src = 'obstacle.png';
+
+    // --- CẤU HÌNH GÓC NHÌN (Đã chỉnh khớp với ảnh background của bạn) ---
+    const HORIZON_Y = 200; // Đường chân trời ở ngay giữa ảnh
+    const CENTER_X = 400;  // Tâm đường
+    const ROAD_LEFT = 100; // Mép vỉa hè trái
+    const ROAD_RIGHT = 700;// Mép vỉa hè phải
+
+    let gameActive = false;
+    let score = 0;
+    let gameSpeed = 6;
+    let frameCount = 0;
+    let framesUntilNextObstacle = 60;
+
+    let keys = {};
+    window.addEventListener('keydown', e => keys[e.code] = true);
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    // --- ĐỐI TƯỢNG XE TĂNG ---
+    const tank = {
+        x: 400,
+        y: 260, // Tọa độ Y chuẩn để xe nằm trên mặt đường
+        w: 160, h: 120,
+        speed: 5.5,
+        update() {
+            if (keys['ArrowLeft'] || keys['KeyA']) this.x -= this.speed;
+            if (keys['ArrowRight'] || keys['KeyD']) this.x += this.speed;
+            
+            // Giới hạn xe không chạy lên lề đường
+            if (this.x < ROAD_LEFT + this.w/2) this.x = ROAD_LEFT + this.w/2;
+            if (this.x > ROAD_RIGHT - this.w/2) this.x = ROAD_RIGHT - this.w/2;
+        },
+        draw() {
+            // Hiệu ứng nảy: Cứ mỗi 6 frame thì xe thụt xuống 3 pixel
+            let bounce = (frameCount % 6 < 3) ? 3 : 0;
+            // Vẽ xe tăng
+            if(tankImg.complete) {
+                ctx.drawImage(tankImg, this.x - this.w/2, this.y + bounce, this.w, this.h);
+            }
+        }
+    };
+
+    let obstacles = [];
+    function spawnObstacle() {
+        framesUntilNextObstacle--; // Đếm ngược
+        
+        if (framesUntilNextObstacle <= 0) {
+            obstacles.push({
+                // Thu hẹp vùng xuất hiện để lô cốt không nằm sát lề, nhường đường cho xe lách
+                targetX: Math.random() * (ROAD_RIGHT - ROAD_LEFT - 200) + ROAD_LEFT + 100,
+                progress: 0,
+                baseW: 140, baseH: 100 
+            });
+
+            // TÍNH TOÁN KHOẢNG CÁCH:
+            // Tốc độ game càng nhanh thì lô cốt ra càng mau, nhưng TỐI THIỂU phải cách nhau 50 khung hình để luôn có đường lách
+            framesUntilNextObstacle = Math.max(25, 90 - (gameSpeed * 4));
+        }
+    }
+
+    function updateGame() {
+        if (!gameActive) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Vẽ Background
+        if(bgImg.complete) {
+            ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+        }
+
+        // 2. Cập nhật và Vẽ Lô cốt
+        obstacles.forEach((obs, index) => {
+            obs.progress += gameSpeed * 0.0022; // Tốc độ trôi lại gần
+
+            let scale = Math.pow(obs.progress, 2); 
+            // Tính toán tọa độ đổ bóng xa gần
+            let currentY = HORIZON_Y + (canvas.height - HORIZON_Y + 50) * scale; // Đã sửa thành scale
+            let currentX = CENTER_X + (obs.targetX - CENTER_X) * scale;          // Đã sửa thành scale
+
+            let w = obs.baseW * scale;
+            let h = obs.baseH * scale;
+
+            if(obsImg.complete) {
+                ctx.drawImage(obsImg, currentX - w/2, currentY - h, w, h);
+            }
+
+            // 3. Xét Va Chạm
+            if (obs.progress > 0.85 && obs.progress < 1.0) {
+                let dx = Math.abs(currentX - tank.x);
+                if (dx < (w/2 + tank.w/2 - 45)) { 
+                    gameOver();
+                }
+            }
+
+            // Xóa khi trôi qua màn hình
+            if (obs.progress > 1.2) {
+                obstacles.splice(index, 1);
+            }
+        });
+
+        // 4. Vẽ xe tăng
+        tank.update();
+        tank.draw();
+
+        // 5. Tính điểm
+        if(frameCount % 10 === 0) {
+            score++;
+            scoreEl.innerText = score;
+            // Thay đổi ở dòng dưới: Ép tăng tốc sớm hơn và gắt hơn
+            if (score % 50 === 0) gameSpeed += 1.0; 
+        }
+
+        spawnObstacle();
+        frameCount++;
+        requestAnimationFrame(updateGame);
+    }
+
+    function startGame() {
+        gameActive = true;
+        score = 0; frameCount = 0; gameSpeed = 6; obstacles = [];
+        framesUntilNextObstacle = 60;
+        tank.x = 400; 
+        scoreEl.innerText = 0;
+        menu.style.display = 'none';
+        lbPanel.style.display = 'none';
+        updateGame();
+    }
+
+    function gameOver() {
+        gameActive = false;
+        menu.style.display = 'block';
+        document.getElementById('menu-title').innerText = "KẾT THÚC!";
+        document.getElementById('final-score').innerText = "Thành tích: " + score + " km";
+        saveScore(score);
+    }
+
+    async function saveScore(s) {
+        if(s <= 0) return;
+        const name = prompt("Báo cáo chỉ huy! Hãy nhập tên để ghi công:");
+        if (name) {
+            try {
+                await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ playerName: name, score: s })
+                });
+            } catch (error) {
+                console.error("Lỗi lưu điểm:", error);
+            }
+        }
+    }
+
+    async function showLeaderboard() {
+        menu.style.display = 'none';
+        lbPanel.style.display = 'block';
+        lbBody.innerHTML = '<tr><td colspan="3">Đang kết nối trung tâm...</td></tr>';
+        try {
+            const response = await fetch(API_URL);
+            const data = await response.json();
+            lbBody.innerHTML = '';
+            data.forEach((item, index) => {
+                let medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+                lbBody.innerHTML += `<tr><td>${index + 1} ${medal}</td><td><b>${item.playerName}</b></td><td style="color:#DA251D; font-weight:bold;">${item.score}</td></tr>`;
+            });
+        } catch (error) {
+            lbBody.innerHTML = '<tr><td colspan="3" style="color:red;">Lỗi kết nối Server! Nhớ bật Visual Studio chạy C# nhé.</td></tr>';
+        }
+    }
+
+    function hideLeaderboard() {
+        lbPanel.style.display = 'none';
+        menu.style.display = 'block';
+    }
+</script>
+</body>
+</html>
