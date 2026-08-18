@@ -11,7 +11,6 @@ namespace TocHanhAPI.Data
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            // Kết nối class này với bảng Leaderboard trong SQL
             modelBuilder.Entity<Leaderboard>().ToTable("Leaderboard");
         }
     }
