@@ -16,7 +16,6 @@ namespace TocHanhAPI.Controllers
             _context = context;
         }
 
-        // GET: api/Leaderboard - Lấy Top 10 người điểm cao
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Leaderboard>>> GetTopScores()
         {
@@ -26,7 +25,6 @@ namespace TocHanhAPI.Controllers
                 .ToListAsync();
         }
 
-        // POST: api/Leaderboard - Lưu điểm mới
         [HttpPost]
         public async Task<ActionResult<Leaderboard>> PostScore(Leaderboard scoreEntry)
         {
